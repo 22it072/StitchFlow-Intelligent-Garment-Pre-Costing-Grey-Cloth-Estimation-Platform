@@ -17,6 +17,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get("/", (req, res) => {
+  res.send("StitchFlow Backend is running 🚀");
+});
+
+
 // ============ EXISTING ROUTES ============
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/companies', require('./routes/companyRoutes'));
