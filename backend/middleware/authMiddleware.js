@@ -1,5 +1,7 @@
+// backend/middleware/authMiddleware.js
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const CompanyUser = require('../models/CompanyUser');
 
 const protect = async (req, res, next) => {
   let token;
@@ -31,4 +33,29 @@ const protect = async (req, res, next) => {
   }
 };
 
-module.exports = { protect };
+// Optional: Get company context from header (for non-company routes that might need it)
+const getCompanyContext = async (req, res, next) => {
+  try {
+    const companyId = req.headers['x-company-id'];
+    
+    if (companyId && req.user) {
+      const membership = await CompanyUser.findOne({
+        user: req.user._id,
+        company: companyId,
+        isActive: true
+      });
+      
+      if (membership) {
+        req.companyId = companyId;
+        req.userRole = membership.role;
+      }
+    }
+    
+    next();
+  } catch (error) {
+    // Don't fail, just continue without company context
+    next();
+  }
+};
+
+module.exports = { protect, getCompanyContext };

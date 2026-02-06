@@ -8,9 +8,18 @@ const settingsSchema = new mongoose.Schema(
       ref: 'User',
       unique: true,
     },
+    // Calculation Settings
     defaultGstPercentage: {
       type: Number,
       default: 5,
+      min: 0,
+      max: 100,
+    },
+    defaultWastage: {
+      type: Number,
+      default: 10,
+      min: 0,
+      max: 100,
     },
     weightDecimalPrecision: {
       type: Number,
@@ -24,10 +33,18 @@ const settingsSchema = new mongoose.Schema(
       min: 1,
       max: 4,
     },
+    // Behavior Settings
     enableWeft2ByDefault: {
       type: Boolean,
       default: false,
     },
+    autoSaveInterval: {
+      type: Number,
+      default: 30,
+      min: 10,
+      max: 300,
+    },
+    // Display Settings
     currencySymbol: {
       type: String,
       default: '₹',
@@ -40,10 +57,6 @@ const settingsSchema = new mongoose.Schema(
       type: String,
       default: 'DD/MM/YYYY',
     },
-    autoSaveInterval: {
-      type: Number,
-      default: 30, // seconds
-    },
     theme: {
       type: String,
       enum: ['light', 'dark', 'system'],
@@ -54,5 +67,16 @@ const settingsSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// Pre-save middleware to ensure defaults
+settingsSchema.pre('save', function(next) {
+  if (this.defaultWastage === undefined || this.defaultWastage === null) {
+    this.defaultWastage = 10;
+  }
+  if (this.defaultGstPercentage === undefined || this.defaultGstPercentage === null) {
+    this.defaultGstPercentage = 5;
+  }
+  next();
+});
 
 module.exports = mongoose.model('Settings', settingsSchema);

@@ -16,16 +16,6 @@ const EstimateComparison = () => {
   const [estimates, setEstimates] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const ids = searchParams.get('ids')?.split(',').filter(Boolean);
-    if (ids?.length >= 2) {
-      fetchEstimates(ids);
-    } else {
-      toast.error('Select at least 2 estimates to compare');
-      navigate('/estimates');
-    }
-  }, [searchParams, navigate]);
-
   const fetchEstimates = async (ids) => {
     try {
       setLoading(true);
@@ -39,7 +29,7 @@ const EstimateComparison = () => {
       setLoading(false);
     }
   };
-
+  
   const chartData = {
     labels: estimates.map(e => e.qualityName.substring(0, 15)),
     datasets: [
@@ -93,6 +83,16 @@ const EstimateComparison = () => {
       },
     },
   };
+
+  useEffect(() => {
+    const ids = searchParams.get('ids')?.split(',').filter(Boolean);
+    if (ids?.length >= 2) {
+      fetchEstimates(ids);
+    } else {
+      toast.error('Select at least 2 estimates to compare');
+      navigate('/estimates');
+    }
+  }, [searchParams, navigate]);
 
   if (loading) {
     return (
@@ -161,7 +161,7 @@ const EstimateComparison = () => {
                 </td>
                 {estimates.map((e) => (
                   <td key={e._id} className="py-3 px-6 text-center">
-                    {e.totalWeight?.toFixed(4)} gm
+                    {e.totalWeight?.toFixed(4)} kg
                   </td>
                 ))}
               </tr>
@@ -223,7 +223,7 @@ const EstimateComparison = () => {
               {/* Weft-2 */}
               <tr className="table-row-hover">
                 <td className="py-3 px-4 font-medium text-gray-900 sticky left-0 bg-white">
-                  Weft-2 Enabled
+                  Weft 2 Enabled
                 </td>
                 {estimates.map((e) => (
                   <td key={e._id} className="py-3 px-6 text-center">

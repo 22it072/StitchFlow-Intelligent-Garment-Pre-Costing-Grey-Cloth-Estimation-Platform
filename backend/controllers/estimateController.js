@@ -1,19 +1,132 @@
+// backend/controllers/estimateController.js
 const Estimate = require('../models/Estimate');
 const Draft = require('../models/Draft');
 const Yarn = require('../models/Yarn');
 const { calculateEstimate } = require('../utils/calculations');
+const mongoose = require('mongoose');
 
-// @desc    Get all estimates for user
+// Helper function to safely generate yarn display name
+const generateYarnDisplayName = (yarn) => {
+  if (!yarn) return '';
+  
+  const { name, yarnName, denier, yarnCategory, tpm, filamentCount } = yarn;
+  const yarnNameToUse = name || yarnName || '';
+  
+  if (!yarnNameToUse) return '';
+  if (!denier) return yarnNameToUse;
+  
+  let displayName = yarnNameToUse;
+  
+  if (yarnCategory === 'filament') {
+    if (filamentCount && filamentCount > 0) {
+      displayName = `${yarnNameToUse} ${denier}/${filamentCount}`;
+      if (tpm && tpm > 0) {
+        displayName = `${yarnNameToUse} ${denier}/${filamentCount} TPM ${tpm}`;
+      }
+    } else {
+      displayName = `${yarnNameToUse} ${denier}D`;
+      if (tpm && tpm > 0) {
+        displayName = `${yarnNameToUse} ${denier}D TPM ${tpm}`;
+      }
+    }
+  } else {
+    if (tpm && tpm > 0) {
+      displayName = `${yarnNameToUse} ${denier}/${tpm}`;
+    } else {
+      displayName = `${yarnNameToUse} ${denier}D`;
+    }
+  }
+  
+  return displayName.trim();
+};
+
+// Helper to normalize estimate data (handle both old and new structure)
+const normalizeEstimateData = (estimate) => {
+  if (!estimate) return null;
+  
+  const normalized = estimate.toObject ? estimate.toObject() : { ...estimate };
+  
+  // Normalize warp
+  if (normalized.warp && !normalized.warp.yarn && normalized.warp.yarnName) {
+    normalized.warp.yarn = {
+      yarnId: normalized.warp.yarnId || null,
+      yarnName: normalized.warp.yarnName,
+      displayName: normalized.warp.displayName || generateYarnDisplayName({
+        yarnName: normalized.warp.yarnName,
+        denier: normalized.warp.denier,
+        yarnCategory: normalized.warp.yarnCategory || 'spun',
+        tpm: normalized.warp.tpm,
+        filamentCount: normalized.warp.filamentCount,
+      }),
+      denier: normalized.warp.denier,
+      yarnCategory: normalized.warp.yarnCategory || 'spun',
+      tpm: normalized.warp.tpm || null,
+      filamentCount: normalized.warp.filamentCount || null,
+      yarnPrice: normalized.warp.yarnPrice || 0,
+      yarnGst: normalized.warp.yarnGst || 0,
+    };
+  }
+  
+  // Normalize weft
+  if (normalized.weft && !normalized.weft.yarn && normalized.weft.yarnName) {
+    normalized.weft.yarn = {
+      yarnId: normalized.weft.yarnId || null,
+      yarnName: normalized.weft.yarnName,
+      displayName: normalized.weft.displayName || generateYarnDisplayName({
+        yarnName: normalized.weft.yarnName,
+        denier: normalized.weft.denier,
+        yarnCategory: normalized.weft.yarnCategory || 'spun',
+        tpm: normalized.weft.tpm,
+        filamentCount: normalized.weft.filamentCount,
+      }),
+      denier: normalized.weft.denier,
+      yarnCategory: normalized.weft.yarnCategory || 'spun',
+      tpm: normalized.weft.tpm || null,
+      filamentCount: normalized.weft.filamentCount || null,
+      yarnPrice: normalized.weft.yarnPrice || 0,
+      yarnGst: normalized.weft.yarnGst || 0,
+    };
+  }
+  
+  // Normalize weft2 if enabled
+  if (normalized.weft2Enabled && normalized.weft2 && !normalized.weft2.yarn && normalized.weft2.yarnName) {
+    normalized.weft2.yarn = {
+      yarnId: normalized.weft2.yarnId || null,
+      yarnName: normalized.weft2.yarnName,
+      displayName: normalized.weft2.displayName || generateYarnDisplayName({
+        yarnName: normalized.weft2.yarnName,
+        denier: normalized.weft2.denier,
+        yarnCategory: normalized.weft2.yarnCategory || 'spun',
+        tpm: normalized.weft2.tpm,
+        filamentCount: normalized.weft2.filamentCount,
+      }),
+      denier: normalized.weft2.denier,
+      yarnCategory: normalized.weft2.yarnCategory || 'spun',
+      tpm: normalized.weft2.tpm || null,
+      filamentCount: normalized.weft2.filamentCount || null,
+      yarnPrice: normalized.weft2.yarnPrice || 0,
+      yarnGst: normalized.weft2.yarnGst || 0,
+    };
+  }
+  
+  return normalized;
+};
+
+// @desc    Get all estimates for company
 // @route   GET /api/estimates
-// @access  Private
+// @access  Private (Viewer+)
 const getEstimates = async (req, res) => {
   try {
     const { search, sort, startDate, endDate, page = 1, limit = 20 } = req.query;
     
-    let query = { user: req.user._id };
+    // UPDATED: Company-scoped query
+    let query = { company: req.companyId };
     
     if (search) {
-      query.$text = { $search: search };
+      query.$or = [
+        { qualityName: { $regex: search, $options: 'i' } },
+        { notes: { $regex: search, $options: 'i' } },
+      ];
     }
     
     if (startDate || endDate) {
@@ -33,12 +146,17 @@ const getEstimates = async (req, res) => {
       .sort(sortOption)
       .skip(skip)
       .limit(parseInt(limit))
-      .select('-versions');
+      .select('-versions')
+      .populate('user', 'name email') // Include user info for audit
+      .lean();
 
     const total = await Estimate.countDocuments(query);
     
+    // Normalize each estimate
+    const normalizedEstimates = estimates.map(est => normalizeEstimateData(est));
+    
     res.json({
-      estimates,
+      estimates: normalizedEstimates,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -48,34 +166,47 @@ const getEstimates = async (req, res) => {
     });
   } catch (error) {
     console.error('Get estimates error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Get single estimate with full details
 // @route   GET /api/estimates/:id
-// @access  Private
+// @access  Private (Viewer+)
 const getEstimate = async (req, res) => {
   try {
+    console.log('Fetching estimate:', req.params.id);
+    
+    // UPDATED: Company-scoped query
     const estimate = await Estimate.findOne({
       _id: req.params.id,
-      user: req.user._id,
-    }).populate('warp.yarnId weft.yarnId weft2.yarnId');
+      company: req.companyId,
+    })
+    .populate('user', 'name email')
+    .lean();
 
     if (!estimate) {
       return res.status(404).json({ message: 'Estimate not found' });
     }
 
-    res.json(estimate);
+    console.log('Raw estimate from DB:', JSON.stringify(estimate, null, 2));
+    
+    // Normalize the estimate to handle old data structure
+    const normalizedEstimate = normalizeEstimateData(estimate);
+    
+    console.log('Normalized estimate:', JSON.stringify(normalizedEstimate, null, 2));
+
+    res.json(normalizedEstimate);
   } catch (error) {
     console.error('Get estimate error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Create estimate
 // @route   POST /api/estimates
-// @access  Private
+// @access  Private (Editor+)
 const createEstimate = async (req, res) => {
   try {
     const {
@@ -89,6 +220,27 @@ const createEstimate = async (req, res) => {
       tags,
     } = req.body;
 
+    console.log('Creating estimate with data:', JSON.stringify(req.body, null, 2));
+
+    // Build yarn details from input
+    const buildYarnDetails = (data) => ({
+      yarnId: data.yarnId || null,
+      yarnName: data.yarnName || '',
+      displayName: data.displayName || generateYarnDisplayName({
+        yarnName: data.yarnName,
+        denier: data.denier,
+        yarnCategory: data.yarnCategory || 'spun',
+        tpm: data.tpm,
+        filamentCount: data.filamentCount,
+      }),
+      denier: data.denier || 0,
+      yarnCategory: data.yarnCategory || 'spun',
+      tpm: data.tpm || null,
+      filamentCount: data.filamentCount || null,
+      yarnPrice: data.yarnPrice || 0,
+      yarnGst: data.yarnGst || 0,
+    });
+
     // Perform calculations
     const calcResults = calculateEstimate({
       warp,
@@ -98,57 +250,49 @@ const createEstimate = async (req, res) => {
       otherCostPerMeter,
     });
 
-    // Build estimate data
+    // UPDATED: Build estimate data with company
     const estimateData = {
+      company: req.companyId, // NEW: Add company reference
       user: req.user._id,
       qualityName,
       warp: {
-        tar: warp.tar,
-        denier: warp.denier,
-        wastage: warp.wastage,
-        yarnId: warp.yarnId,
-        yarnName: warp.yarnName,
-        yarnPrice: warp.yarnPrice,
-        yarnGst: warp.yarnGst,
+        tar: parseFloat(warp.tar),
+        denier: parseFloat(warp.denier),
+        wastage: parseFloat(warp.wastage),
+        yarn: buildYarnDetails(warp),
         rawWeight: calcResults.warp.rawWeight,
         formattedWeight: calcResults.warp.formattedWeight,
         rawCost: calcResults.warp.rawCost,
         formattedCost: calcResults.warp.formattedCost,
       },
       weft: {
-        peek: weft.peek,
-        panna: weft.panna,
-        denier: weft.denier,
-        wastage: weft.wastage,
-        yarnId: weft.yarnId,
-        yarnName: weft.yarnName,
-        yarnPrice: weft.yarnPrice,
-        yarnGst: weft.yarnGst,
+        peek: parseFloat(weft.peek),
+        panna: parseFloat(weft.panna),
+        denier: parseFloat(weft.denier),
+        wastage: parseFloat(weft.wastage),
+        yarn: buildYarnDetails(weft),
         rawWeight: calcResults.weft.rawWeight,
         formattedWeight: calcResults.weft.formattedWeight,
         rawCost: calcResults.weft.rawCost,
         formattedCost: calcResults.weft.formattedCost,
       },
-      weft2Enabled,
-      otherCostPerMeter: otherCostPerMeter || 0,
+      weft2Enabled: Boolean(weft2Enabled),
+      otherCostPerMeter: parseFloat(otherCostPerMeter) || 0,
       totalWeight: calcResults.totals.totalWeight,
       totalCost: calcResults.totals.totalCost,
       notes,
-      tags,
+      tags: tags || [],
       currentVersion: 1,
     };
 
     // Add Weft-2 if enabled
     if (weft2Enabled && weft2 && calcResults.weft2) {
       estimateData.weft2 = {
-        peek: weft2.peek,
-        panna: weft2.panna,
-        denier: weft2.denier,
-        wastage: weft2.wastage,
-        yarnId: weft2.yarnId,
-        yarnName: weft2.yarnName,
-        yarnPrice: weft2.yarnPrice,
-        yarnGst: weft2.yarnGst,
+        peek: parseFloat(weft2.peek),
+        panna: parseFloat(weft2.panna),
+        denier: parseFloat(weft2.denier),
+        wastage: parseFloat(weft2.wastage),
+        yarn: buildYarnDetails(weft2),
         rawWeight: calcResults.weft2.rawWeight,
         formattedWeight: calcResults.weft2.formattedWeight,
         rawCost: calcResults.weft2.rawCost,
@@ -156,37 +300,48 @@ const createEstimate = async (req, res) => {
       };
     }
 
+    console.log('Saving estimate:', JSON.stringify(estimateData, null, 2));
+
     const estimate = await Estimate.create(estimateData);
 
-    // Increment yarn usage counts
-    if (warp.yarnId) {
-      await Yarn.findByIdAndUpdate(warp.yarnId, { $inc: { usageCount: 1 } });
-    }
-    if (weft.yarnId) {
-      await Yarn.findByIdAndUpdate(weft.yarnId, { $inc: { usageCount: 1 } });
-    }
-    if (weft2Enabled && weft2?.yarnId) {
-      await Yarn.findByIdAndUpdate(weft2.yarnId, { $inc: { usageCount: 1 } });
+    // Increment yarn usage counts (company-scoped)
+    const yarnIds = [warp.yarnId, weft.yarnId];
+    if (weft2Enabled && weft2?.yarnId) yarnIds.push(weft2.yarnId);
+    
+    for (const yarnId of yarnIds) {
+      if (yarnId) {
+        // UPDATED: Company-scoped yarn update
+        await Yarn.findOneAndUpdate(
+          { _id: yarnId, company: req.companyId },
+          { $inc: { usageCount: 1 } }
+        );
+      }
     }
 
-    // Clear any draft for this user
-    await Draft.deleteOne({ user: req.user._id, formType: 'estimate' });
+    // Clear any draft (company-scoped)
+    await Draft.deleteOne({ 
+      user: req.user._id, 
+      company: req.companyId,
+      formType: 'estimate' 
+    });
 
-    res.status(201).json(estimate);
+    res.status(201).json(normalizeEstimateData(estimate));
   } catch (error) {
     console.error('Create estimate error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Update estimate (with version history)
 // @route   PUT /api/estimates/:id
-// @access  Private
+// @access  Private (Editor+)
 const updateEstimate = async (req, res) => {
   try {
+    // UPDATED: Company-scoped query
     const estimate = await Estimate.findOne({
       _id: req.params.id,
-      user: req.user._id,
+      company: req.companyId,
     });
 
     if (!estimate) {
@@ -203,6 +358,25 @@ const updateEstimate = async (req, res) => {
       notes,
       tags,
     } = req.body;
+
+    // Build yarn details
+    const buildYarnDetails = (data) => ({
+      yarnId: data.yarnId || null,
+      yarnName: data.yarnName || '',
+      displayName: data.displayName || generateYarnDisplayName({
+        yarnName: data.yarnName,
+        denier: data.denier,
+        yarnCategory: data.yarnCategory || 'spun',
+        tpm: data.tpm,
+        filamentCount: data.filamentCount,
+      }),
+      denier: data.denier || 0,
+      yarnCategory: data.yarnCategory || 'spun',
+      tpm: data.tpm || null,
+      filamentCount: data.filamentCount || null,
+      yarnPrice: data.yarnPrice || 0,
+      yarnGst: data.yarnGst || 0,
+    });
 
     // Save current version to history
     const currentVersion = {
@@ -220,6 +394,7 @@ const updateEstimate = async (req, res) => {
         tags: estimate.tags,
       },
       editedAt: new Date(),
+      editedBy: req.user.name || req.user.email, // Track who made changes
     };
 
     // Perform new calculations
@@ -234,44 +409,35 @@ const updateEstimate = async (req, res) => {
     // Update fields
     estimate.qualityName = qualityName;
     estimate.warp = {
-      tar: warp.tar,
-      denier: warp.denier,
-      wastage: warp.wastage,
-      yarnId: warp.yarnId,
-      yarnName: warp.yarnName,
-      yarnPrice: warp.yarnPrice,
-      yarnGst: warp.yarnGst,
+      tar: parseFloat(warp.tar),
+      denier: parseFloat(warp.denier),
+      wastage: parseFloat(warp.wastage),
+      yarn: buildYarnDetails(warp),
       rawWeight: calcResults.warp.rawWeight,
       formattedWeight: calcResults.warp.formattedWeight,
       rawCost: calcResults.warp.rawCost,
       formattedCost: calcResults.warp.formattedCost,
     };
     estimate.weft = {
-      peek: weft.peek,
-      panna: weft.panna,
-      denier: weft.denier,
-      wastage: weft.wastage,
-      yarnId: weft.yarnId,
-      yarnName: weft.yarnName,
-      yarnPrice: weft.yarnPrice,
-      yarnGst: weft.yarnGst,
+      peek: parseFloat(weft.peek),
+      panna: parseFloat(weft.panna),
+      denier: parseFloat(weft.denier),
+      wastage: parseFloat(weft.wastage),
+      yarn: buildYarnDetails(weft),
       rawWeight: calcResults.weft.rawWeight,
       formattedWeight: calcResults.weft.formattedWeight,
       rawCost: calcResults.weft.rawCost,
       formattedCost: calcResults.weft.formattedCost,
     };
-    estimate.weft2Enabled = weft2Enabled;
+    estimate.weft2Enabled = Boolean(weft2Enabled);
     
     if (weft2Enabled && weft2 && calcResults.weft2) {
       estimate.weft2 = {
-        peek: weft2.peek,
-        panna: weft2.panna,
-        denier: weft2.denier,
-        wastage: weft2.wastage,
-        yarnId: weft2.yarnId,
-        yarnName: weft2.yarnName,
-        yarnPrice: weft2.yarnPrice,
-        yarnGst: weft2.yarnGst,
+        peek: parseFloat(weft2.peek),
+        panna: parseFloat(weft2.panna),
+        denier: parseFloat(weft2.denier),
+        wastage: parseFloat(weft2.wastage),
+        yarn: buildYarnDetails(weft2),
         rawWeight: calcResults.weft2.rawWeight,
         formattedWeight: calcResults.weft2.formattedWeight,
         rawCost: calcResults.weft2.rawCost,
@@ -281,30 +447,31 @@ const updateEstimate = async (req, res) => {
       estimate.weft2 = undefined;
     }
 
-    estimate.otherCostPerMeter = otherCostPerMeter || 0;
+    estimate.otherCostPerMeter = parseFloat(otherCostPerMeter) || 0;
     estimate.totalWeight = calcResults.totals.totalWeight;
     estimate.totalCost = calcResults.totals.totalCost;
     estimate.notes = notes;
-    estimate.tags = tags;
+    estimate.tags = tags || [];
     estimate.versions.push(currentVersion);
     estimate.currentVersion += 1;
 
     await estimate.save();
-    res.json(estimate);
+    res.json(normalizeEstimateData(estimate));
   } catch (error) {
     console.error('Update estimate error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Delete estimate
 // @route   DELETE /api/estimates/:id
-// @access  Private
+// @access  Private (Admin+)
 const deleteEstimate = async (req, res) => {
   try {
+    // UPDATED: Company-scoped query
     const estimate = await Estimate.findOne({
       _id: req.params.id,
-      user: req.user._id,
+      company: req.companyId,
     });
 
     if (!estimate) {
@@ -315,19 +482,20 @@ const deleteEstimate = async (req, res) => {
     res.json({ message: 'Estimate removed' });
   } catch (error) {
     console.error('Delete estimate error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Duplicate estimate
 // @route   POST /api/estimates/:id/duplicate
-// @access  Private
+// @access  Private (Editor+)
 const duplicateEstimate = async (req, res) => {
   try {
+    // UPDATED: Company-scoped query
     const estimate = await Estimate.findOne({
       _id: req.params.id,
-      user: req.user._id,
-    });
+      company: req.companyId,
+    }).lean();
 
     if (!estimate) {
       return res.status(404).json({ message: 'Estimate not found' });
@@ -335,43 +503,44 @@ const duplicateEstimate = async (req, res) => {
 
     const { newQualityName } = req.body;
 
+    // Normalize the original estimate first
+    const normalizedEstimate = normalizeEstimateData(estimate);
+
+    // UPDATED: Create duplicate with company reference
     const duplicateData = {
+      company: req.companyId, // NEW: Add company reference
       user: req.user._id,
-      qualityName: newQualityName || `${estimate.qualityName} (Copy)`,
-      warp: { ...estimate.warp.toObject() },
-      weft: { ...estimate.weft.toObject() },
-      weft2Enabled: estimate.weft2Enabled,
-      weft2: estimate.weft2 ? { ...estimate.weft2.toObject() } : undefined,
-      otherCostPerMeter: estimate.otherCostPerMeter,
-      totalWeight: estimate.totalWeight,
-      totalCost: estimate.totalCost,
-      notes: estimate.notes,
-      tags: estimate.tags,
+      qualityName: newQualityName || `${normalizedEstimate.qualityName} (Copy)`,
+      warp: { ...normalizedEstimate.warp },
+      weft: { ...normalizedEstimate.weft },
+      weft2Enabled: normalizedEstimate.weft2Enabled,
+      weft2: normalizedEstimate.weft2 ? { ...normalizedEstimate.weft2 } : undefined,
+      otherCostPerMeter: normalizedEstimate.otherCostPerMeter,
+      totalWeight: normalizedEstimate.totalWeight,
+      totalCost: normalizedEstimate.totalCost,
+      notes: normalizedEstimate.notes,
+      tags: normalizedEstimate.tags,
       currentVersion: 1,
       versions: [],
     };
 
-    // Remove _id from nested objects
-    delete duplicateData.warp._id;
-    delete duplicateData.weft._id;
-    if (duplicateData.weft2) delete duplicateData.weft2._id;
-
     const newEstimate = await Estimate.create(duplicateData);
-    res.status(201).json(newEstimate);
+    res.status(201).json(normalizeEstimateData(newEstimate));
   } catch (error) {
     console.error('Duplicate estimate error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Revert to previous version
 // @route   POST /api/estimates/:id/revert/:version
-// @access  Private
+// @access  Private (Editor+)
 const revertVersion = async (req, res) => {
   try {
+    // UPDATED: Company-scoped query
     const estimate = await Estimate.findOne({
       _id: req.params.id,
-      user: req.user._id,
+      company: req.companyId,
     });
 
     if (!estimate) {
@@ -403,24 +572,35 @@ const revertVersion = async (req, res) => {
         tags: estimate.tags,
       },
       editedAt: new Date(),
+      editedBy: req.user.name || req.user.email,
     };
     estimate.versions.push(currentVersion);
 
     // Restore target version
-    Object.assign(estimate, targetVersion.data);
+    const versionData = targetVersion.data;
+    estimate.qualityName = versionData.qualityName;
+    estimate.warp = versionData.warp;
+    estimate.weft = versionData.weft;
+    estimate.weft2Enabled = versionData.weft2Enabled;
+    estimate.weft2 = versionData.weft2;
+    estimate.otherCostPerMeter = versionData.otherCostPerMeter;
+    estimate.totalWeight = versionData.totalWeight;
+    estimate.totalCost = versionData.totalCost;
+    estimate.notes = versionData.notes;
+    estimate.tags = versionData.tags;
     estimate.currentVersion += 1;
 
     await estimate.save();
-    res.json(estimate);
+    res.json(normalizeEstimateData(estimate));
   } catch (error) {
     console.error('Revert version error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Compare multiple estimates
 // @route   POST /api/estimates/compare
-// @access  Private
+// @access  Private (Viewer+)
 const compareEstimates = async (req, res) => {
   try {
     const { estimateIds } = req.body;
@@ -429,75 +609,95 @@ const compareEstimates = async (req, res) => {
       return res.status(400).json({ message: 'At least 2 estimates required for comparison' });
     }
 
+    // UPDATED: Company-scoped query
     const estimates = await Estimate.find({
       _id: { $in: estimateIds },
-      user: req.user._id,
-    }).select('-versions');
+      company: req.companyId,
+    }).select('-versions').lean();
 
     if (estimates.length !== estimateIds.length) {
-      return res.status(404).json({ message: 'Some estimates not found' });
+      return res.status(404).json({ message: 'Some estimates not found or not accessible' });
     }
 
-    res.json(estimates);
+    // Normalize all estimates
+    const normalizedEstimates = estimates.map(est => normalizeEstimateData(est));
+
+    res.json(normalizedEstimates);
   } catch (error) {
     console.error('Compare estimates error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Save draft
 // @route   POST /api/estimates/draft
-// @access  Private
+// @access  Private (Editor+)
 const saveDraft = async (req, res) => {
   try {
     const { formData } = req.body;
 
+    // UPDATED: Company-scoped draft
     await Draft.findOneAndUpdate(
-      { user: req.user._id, formType: 'estimate' },
-      { formData, lastSaved: new Date() },
+      { 
+        user: req.user._id, 
+        company: req.companyId,
+        formType: 'estimate' 
+      },
+      { 
+        formData, 
+        lastSaved: new Date(),
+        company: req.companyId // Ensure company is set
+      },
       { upsert: true, new: true }
     );
 
     res.json({ message: 'Draft saved' });
   } catch (error) {
     console.error('Save draft error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Get draft
 // @route   GET /api/estimates/draft
-// @access  Private
+// @access  Private (Editor+)
 const getDraft = async (req, res) => {
   try {
+    // UPDATED: Company-scoped draft
     const draft = await Draft.findOne({
       user: req.user._id,
+      company: req.companyId,
       formType: 'estimate',
     });
 
     res.json(draft);
   } catch (error) {
     console.error('Get draft error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Delete draft
 // @route   DELETE /api/estimates/draft
-// @access  Private
+// @access  Private (Editor+)
 const deleteDraft = async (req, res) => {
   try {
-    await Draft.deleteOne({ user: req.user._id, formType: 'estimate' });
+    // UPDATED: Company-scoped draft
+    await Draft.deleteOne({ 
+      user: req.user._id, 
+      company: req.companyId,
+      formType: 'estimate' 
+    });
     res.json({ message: 'Draft deleted' });
   } catch (error) {
     console.error('Delete draft error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
 // @desc    Perform real-time calculation
 // @route   POST /api/estimates/calculate
-// @access  Private
+// @access  Private (Viewer+)
 const calculate = async (req, res) => {
   try {
     const { warp, weft, weft2Enabled, weft2, otherCostPerMeter } = req.body;
@@ -513,7 +713,167 @@ const calculate = async (req, res) => {
     res.json(results);
   } catch (error) {
     console.error('Calculate error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// @desc    Migrate old estimates to new structure (add company field)
+// @route   POST /api/estimates/migrate
+// @access  Private (Admin+)
+const migrateEstimates = async (req, res) => {
+  try {
+    // UPDATED: Company-scoped migration
+    const estimates = await Estimate.find({ company: req.companyId });
+    let migratedCount = 0;
+
+    for (const estimate of estimates) {
+      let needsSave = false;
+
+      // Check and migrate warp
+      if (estimate.warp && !estimate.warp.yarn && estimate.warp.yarnName) {
+        estimate.warp.yarn = {
+          yarnId: estimate.warp.yarnId || null,
+          yarnName: estimate.warp.yarnName,
+          displayName: generateYarnDisplayName({
+            yarnName: estimate.warp.yarnName,
+            denier: estimate.warp.denier,
+            yarnCategory: 'spun',
+          }),
+          denier: estimate.warp.denier,
+          yarnCategory: 'spun',
+          tpm: null,
+          filamentCount: null,
+          yarnPrice: estimate.warp.yarnPrice || 0,
+          yarnGst: estimate.warp.yarnGst || 0,
+        };
+        needsSave = true;
+      }
+
+      // Check and migrate weft
+      if (estimate.weft && !estimate.weft.yarn && estimate.weft.yarnName) {
+        estimate.weft.yarn = {
+          yarnId: estimate.weft.yarnId || null,
+          yarnName: estimate.weft.yarnName,
+          displayName: generateYarnDisplayName({
+            yarnName: estimate.weft.yarnName,
+            denier: estimate.weft.denier,
+            yarnCategory: 'spun',
+          }),
+          denier: estimate.weft.denier,
+          yarnCategory: 'spun',
+          tpm: null,
+          filamentCount: null,
+          yarnPrice: estimate.weft.yarnPrice || 0,
+          yarnGst: estimate.weft.yarnGst || 0,
+        };
+        needsSave = true;
+      }
+
+      // Check and migrate weft2
+      if (estimate.weft2Enabled && estimate.weft2 && !estimate.weft2.yarn && estimate.weft2.yarnName) {
+        estimate.weft2.yarn = {
+          yarnId: estimate.weft2.yarnId || null,
+          yarnName: estimate.weft2.yarnName,
+          displayName: generateYarnDisplayName({
+            yarnName: estimate.weft2.yarnName,
+            denier: estimate.weft2.denier,
+            yarnCategory: 'spun',
+          }),
+          denier: estimate.weft2.denier,
+          yarnCategory: 'spun',
+          tpm: null,
+          filamentCount: null,
+          yarnPrice: estimate.weft2.yarnPrice || 0,
+          yarnGst: estimate.weft2.yarnGst || 0,
+        };
+        needsSave = true;
+      }
+
+      if (needsSave) {
+        await estimate.save();
+        migratedCount++;
+      }
+    }
+
+    res.json({ 
+      message: 'Migration complete', 
+      totalEstimates: estimates.length,
+      migratedCount 
+    });
+  } catch (error) {
+    console.error('Migrate estimates error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// @desc    Get estimate statistics for company
+// @route   GET /api/estimates/stats
+// @access  Private (Viewer+)
+const getEstimateStats = async (req, res) => {
+  try {
+    const companyObjectId = mongoose.Types.ObjectId(req.companyId);
+    
+    const stats = await Estimate.aggregate([
+      { $match: { company: companyObjectId } },
+      {
+        $group: {
+          _id: null,
+          totalEstimates: { $sum: 1 },
+          avgCost: { $avg: '$totalCost' },
+          avgWeight: { $avg: '$totalWeight' },
+          totalCost: { $sum: '$totalCost' },
+          totalWeight: { $sum: '$totalWeight' },
+          minCost: { $min: '$totalCost' },
+          maxCost: { $max: '$totalCost' },
+        },
+      },
+    ]);
+
+    // Get monthly trends
+    const monthlyTrends = await Estimate.aggregate([
+      { $match: { company: companyObjectId } },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' },
+          },
+          count: { $sum: 1 },
+          avgCost: { $avg: '$totalCost' },
+        },
+      },
+      { $sort: { '_id.year': -1, '_id.month': -1 } },
+      { $limit: 12 },
+    ]);
+
+    // Get top qualities by count
+    const topQualities = await Estimate.aggregate([
+      { $match: { company: companyObjectId } },
+      {
+        $group: {
+          _id: '$qualityName',
+          count: { $sum: 1 },
+          avgCost: { $avg: '$totalCost' },
+        },
+      },
+      { $sort: { count: -1 } },
+      { $limit: 10 },
+    ]);
+
+    res.json({
+      overall: stats[0] || {
+        totalEstimates: 0,
+        avgCost: 0,
+        avgWeight: 0,
+        totalCost: 0,
+        totalWeight: 0,
+      },
+      monthlyTrends,
+      topQualities,
+    });
+  } catch (error) {
+    console.error('Get estimate stats error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 
@@ -530,4 +890,6 @@ module.exports = {
   getDraft,
   deleteDraft,
   calculate,
+  migrateEstimates,
+  getEstimateStats,
 };

@@ -1,17 +1,37 @@
+// backend/models/Estimate.js
 const mongoose = require('mongoose');
 
 const versionSchema = new mongoose.Schema({
   versionNumber: Number,
-  data: Object,
+  data: mongoose.Schema.Types.Mixed,
   editedAt: {
     type: Date,
     default: Date.now,
   },
   editedBy: String,
-});
+}, { _id: false });
+
+const yarnDetailsSchema = new mongoose.Schema({
+  yarnId: { type: mongoose.Schema.Types.ObjectId, ref: 'Yarn' },
+  yarnName: String,
+  displayName: String,
+  denier: Number,
+  yarnCategory: { type: String, enum: ['spun', 'filament'], default: 'spun' },
+  tpm: Number,
+  filamentCount: Number,
+  yarnPrice: Number,
+  yarnGst: Number,
+}, { _id: false, strict: false });
 
 const estimateSchema = new mongoose.Schema(
   {
+    // UPDATED: Add company field for multi-tenancy
+    company: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      required: true,
+      index: true,
+    },
     user: {
       type: mongoose.Schema.Types.ObjectId,
       required: true,
@@ -25,33 +45,14 @@ const estimateSchema = new mongoose.Schema(
     
     // Warp Section
     warp: {
-      tar: { type: Number, required: true },
-      denier: { type: Number, required: true },
-      wastage: { type: Number, required: true },
-      yarnId: { type: mongoose.Schema.Types.ObjectId, ref: 'Yarn' },
-      yarnName: String,
-      yarnPrice: Number,
-      yarnGst: Number,
-      rawWeight: Number,
-      formattedWeight: Number,
-      rawCost: Number,
-      formattedCost: Number,
+      type: mongoose.Schema.Types.Mixed,
+      required: true,
     },
     
     // Weft Section
     weft: {
-      peek: { type: Number, required: true },
-      panna: { type: Number, required: true },
-      denier: { type: Number, required: true },
-      wastage: { type: Number, required: true },
-      yarnId: { type: mongoose.Schema.Types.ObjectId, ref: 'Yarn' },
-      yarnName: String,
-      yarnPrice: Number,
-      yarnGst: Number,
-      rawWeight: Number,
-      formattedWeight: Number,
-      rawCost: Number,
-      formattedCost: Number,
+      type: mongoose.Schema.Types.Mixed,
+      required: true,
     },
     
     // Optional Weft-2 Section
@@ -60,18 +61,7 @@ const estimateSchema = new mongoose.Schema(
       default: false,
     },
     weft2: {
-      peek: Number,
-      panna: Number,
-      denier: Number,
-      wastage: Number,
-      yarnId: { type: mongoose.Schema.Types.ObjectId, ref: 'Yarn' },
-      yarnName: String,
-      yarnPrice: Number,
-      yarnGst: Number,
-      rawWeight: Number,
-      formattedWeight: Number,
-      rawCost: Number,
-      formattedCost: Number,
+      type: mongoose.Schema.Types.Mixed,
     },
     
     // Other Cost
@@ -97,10 +87,13 @@ const estimateSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    strict: false,
   }
 );
 
-// Index for search
-estimateSchema.index({ qualityName: 'text', notes: 'text', tags: 'text' });
+// UPDATED: Compound indexes for company-scoped queries
+estimateSchema.index({ company: 1, user: 1 });
+estimateSchema.index({ company: 1, qualityName: 'text', notes: 'text' });
+estimateSchema.index({ company: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Estimate', estimateSchema);
