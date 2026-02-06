@@ -1,5 +1,6 @@
 const Estimate = require('../models/Estimate');
 const Yarn = require('../models/Yarn');
+const mongoose = require('mongoose');
 
 // @desc    Get dashboard analytics
 // @route   GET /api/analytics/dashboard
@@ -7,14 +8,22 @@ const Yarn = require('../models/Yarn');
 const getDashboardAnalytics = async (req, res) => {
   try {
     const userId = req.user._id;
+    const companyId = req.headers['x-company-id'] || req.user.activeCompanyId;
+
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No active company selected'
+      });
+    }
 
     // Get total counts
-    const totalEstimates = await Estimate.countDocuments({ user: userId });
-    const totalYarns = await Yarn.countDocuments({ user: userId });
+    const totalEstimates = await Estimate.countDocuments({ company: companyId, user: userId });
+    const totalYarns = await Yarn.countDocuments({ company: companyId, user: userId });
 
     // Get aggregated data
     const estimateStats = await Estimate.aggregate([
-      { $match: { user: userId } },
+      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
       {
         $group: {
           _id: null,
@@ -27,14 +36,14 @@ const getDashboardAnalytics = async (req, res) => {
     ]);
 
     // Get recent estimates
-    const recentEstimates = await Estimate.find({ user: userId })
+    const recentEstimates = await Estimate.find({ company: companyId, user: userId })
       .sort({ createdAt: -1 })
       .limit(5)
       .select('qualityName totalWeight totalCost createdAt');
 
     // Get yarn usage stats
     const yarnUsageStats = await Yarn.aggregate([
-      { $match: { user: userId } },
+      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
       {
         $group: {
           _id: null,
@@ -45,7 +54,7 @@ const getDashboardAnalytics = async (req, res) => {
     ]);
 
     // Get most used yarns
-    const mostUsedYarns = await Yarn.find({ user: userId })
+    const mostUsedYarns = await Yarn.find({ company: companyId, user: userId })
       .sort({ usageCount: -1 })
       .limit(5)
       .select('name usageCount price yarnType');
@@ -57,6 +66,7 @@ const getDashboardAnalytics = async (req, res) => {
     const monthlyTrends = await Estimate.aggregate([
       {
         $match: {
+          company: new mongoose.Types.ObjectId(companyId),
           user: userId,
           createdAt: { $gte: sixMonthsAgo },
         },
@@ -76,27 +86,35 @@ const getDashboardAnalytics = async (req, res) => {
     ]);
 
     res.json({
-      counts: {
-        totalEstimates,
-        totalYarns,
-      },
-      estimateStats: estimateStats[0] || {
-        avgCost: 0,
-        totalWeight: 0,
-        minCost: 0,
-        maxCost: 0,
-      },
-      yarnStats: yarnUsageStats[0] || {
-        avgPrice: 0,
-        totalUsage: 0,
-      },
-      recentEstimates,
-      mostUsedYarns,
-      monthlyTrends,
+      success: true,
+      data: {
+        counts: {
+          totalEstimates,
+          totalYarns,
+        },
+        estimateStats: estimateStats[0] || {
+          avgCost: 0,
+          totalWeight: 0,
+          minCost: 0,
+          maxCost: 0,
+        },
+        yarnStats: yarnUsageStats[0] || {
+          avgPrice: 0,
+          totalUsage: 0,
+        },
+        recentEstimates,
+        mostUsedYarns,
+        monthlyTrends,
+      }
     });
   } catch (error) {
     console.error('Dashboard analytics error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching dashboard analytics',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Server error'
+    });
   }
 };
 
@@ -106,10 +124,18 @@ const getDashboardAnalytics = async (req, res) => {
 const getYarnUsageAnalytics = async (req, res) => {
   try {
     const userId = req.user._id;
+    const companyId = req.headers['x-company-id'] || req.user.activeCompanyId;
+
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No active company selected'
+      });
+    }
 
     // Usage by yarn type
     const usageByType = await Yarn.aggregate([
-      { $match: { user: userId } },
+      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
       {
         $group: {
           _id: '$yarnType',
@@ -121,14 +147,14 @@ const getYarnUsageAnalytics = async (req, res) => {
     ]);
 
     // Top yarns by usage
-    const topYarns = await Yarn.find({ user: userId })
+    const topYarns = await Yarn.find({ company: companyId, user: userId })
       .sort({ usageCount: -1 })
       .limit(10)
       .select('name usageCount price gstPercentage yarnType');
 
     // Price distribution
     const priceDistribution = await Yarn.aggregate([
-      { $match: { user: userId } },
+      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
       {
         $bucket: {
           groupBy: '$price',
@@ -144,7 +170,7 @@ const getYarnUsageAnalytics = async (req, res) => {
 
     // Cost impact analysis
     const costImpact = await Estimate.aggregate([
-      { $match: { user: userId } },
+      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
       { $unwind: '$warp' },
       {
         $group: {
@@ -158,14 +184,22 @@ const getYarnUsageAnalytics = async (req, res) => {
     ]);
 
     res.json({
-      usageByType,
-      topYarns,
-      priceDistribution,
-      costImpact,
+      success: true,
+      data: {
+        usageByType,
+        topYarns,
+        priceDistribution,
+        costImpact,
+      }
     });
   } catch (error) {
     console.error('Yarn usage analytics error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching yarn usage analytics',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Server error'
+    });
   }
 };
 
@@ -175,7 +209,15 @@ const getYarnUsageAnalytics = async (req, res) => {
 const getCostTrends = async (req, res) => {
   try {
     const userId = req.user._id;
+    const companyId = req.headers['x-company-id'] || req.user.activeCompanyId;
     const { period = '6months' } = req.query;
+
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No active company selected'
+      });
+    }
 
     let startDate = new Date();
     switch (period) {
@@ -198,6 +240,7 @@ const getCostTrends = async (req, res) => {
     const trends = await Estimate.aggregate([
       {
         $match: {
+          company: new mongoose.Types.ObjectId(companyId),
           user: userId,
           createdAt: { $gte: startDate },
         },
@@ -219,10 +262,18 @@ const getCostTrends = async (req, res) => {
       { $sort: { '_id.year': 1, '_id.month': 1, '_id.week': 1 } },
     ]);
 
-    res.json(trends);
+    res.json({
+      success: true,
+      data: trends
+    });
   } catch (error) {
     console.error('Cost trends error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching cost trends',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Server error'
+    });
   }
 };
 

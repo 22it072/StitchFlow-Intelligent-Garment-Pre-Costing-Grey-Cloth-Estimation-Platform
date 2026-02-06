@@ -4,10 +4,7 @@ import {
   Save,
   Calculator,
   RefreshCw,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  Trash2,
+  Clock,
 } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
@@ -15,6 +12,7 @@ import Input from '../components/common/Input';
 import Select from '../components/common/Select';
 import { yarnAPI, estimateAPI } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
+import { useNotifications } from '../context/NotificationContext';
 import { calculateEstimate } from '../utils/calculations';
 import { formatCurrency } from '../utils/formatters';
 import toast from 'react-hot-toast';
@@ -24,6 +22,7 @@ const NewEstimate = () => {
   const { id } = useParams();
   const isEditing = !!id;
   const { settings } = useSettings();
+  const { notifyAutoSave, notifyEstimateSaved } = useNotifications();
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -32,13 +31,15 @@ const NewEstimate = () => {
   const [showResults, setShowResults] = useState(false);
   const [results, setResults] = useState(null);
   const [lastAutoSave, setLastAutoSave] = useState(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState('idle');
 
-  const [formData, setFormData] = useState({
+  // Initialize form with default wastage from settings
+  const getInitialFormData = () => ({
     qualityName: '',
     warp: {
       tar: '',
       denier: '',
-      wastage: '',
+      wastage: settings.defaultWastage, // Use default wastage
       yarnId: '',
       yarnName: '',
       yarnPrice: 0,
@@ -48,7 +49,7 @@ const NewEstimate = () => {
       peek: '',
       panna: '',
       denier: '',
-      wastage: '',
+      wastage: settings.defaultWastage, // Use default wastage
       yarnId: '',
       yarnName: '',
       yarnPrice: 0,
@@ -58,7 +59,7 @@ const NewEstimate = () => {
       peek: '',
       panna: '',
       denier: '',
-      wastage: '',
+      wastage: settings.defaultWastage, // Use default wastage
       yarnId: '',
       yarnName: '',
       yarnPrice: 0,
@@ -68,6 +69,15 @@ const NewEstimate = () => {
     notes: '',
     tags: '',
   });
+
+  const [formData, setFormData] = useState(getInitialFormData());
+
+  // Update form when settings change (only for new estimates)
+  useEffect(() => {
+    if (!isEditing && !formData.qualityName) {
+      setFormData(getInitialFormData());
+    }
+  }, [settings.defaultWastage, isEditing]);
 
   // Fetch yarns
   useEffect(() => {
@@ -122,7 +132,16 @@ const NewEstimate = () => {
             yarnName: estimate.weft2.yarnName,
             yarnPrice: estimate.weft2.yarnPrice,
             yarnGst: estimate.weft2.yarnGst,
-          } : formData.weft2,
+          } : {
+            peek: '',
+            panna: '',
+            denier: '',
+            wastage: settings.defaultWastage || 3,
+            yarnId: '',
+            yarnName: '',
+            yarnPrice: 0,
+            yarnGst: 0,
+          },
           otherCostPerMeter: estimate.otherCostPerMeter || '',
           notes: estimate.notes || '',
           tags: estimate.tags?.join(', ') || '',
@@ -138,7 +157,7 @@ const NewEstimate = () => {
     };
 
     fetchEstimate();
-  }, [id, isEditing, navigate]);
+  }, [id, isEditing, navigate, settings.defaultWastage]);
 
   // Check for draft on mount
   useEffect(() => {
@@ -161,17 +180,25 @@ const NewEstimate = () => {
     checkDraft();
   }, [isEditing]);
 
-  // Auto-save draft
+  // Auto-save draft with notification
   const autoSaveDraft = useCallback(async () => {
     if (isEditing) return;
+    if (!formData.qualityName && !formData.warp.tar && !formData.weft.peek) return;
     
     try {
+      setAutoSaveStatus('saving');
       await estimateAPI.saveDraft({ formData: { ...formData, weft2Enabled } });
       setLastAutoSave(new Date());
+      setAutoSaveStatus('saved');
+      
+      notifyAutoSave(formData.qualityName || 'Untitled Estimate');
+      
+      setTimeout(() => setAutoSaveStatus('idle'), 2000);
     } catch (error) {
       console.error('Auto-save failed:', error);
+      setAutoSaveStatus('idle');
     }
-  }, [formData, weft2Enabled, isEditing]);
+  }, [formData, weft2Enabled, isEditing, notifyAutoSave]);
 
   useEffect(() => {
     const interval = setInterval(autoSaveDraft, settings.autoSaveInterval * 1000);
@@ -209,7 +236,6 @@ const NewEstimate = () => {
   };
 
   const handleCalculate = () => {
-    // Validate required fields
     if (!formData.qualityName) {
       toast.error('Please enter a quality name');
       return;
@@ -236,7 +262,6 @@ const NewEstimate = () => {
       }
     }
 
-    // Perform calculation
     const calcInput = {
       warp: {
         tar: parseFloat(formData.warp.tar),
@@ -324,11 +349,11 @@ const NewEstimate = () => {
 
       if (isEditing) {
         await estimateAPI.update(id, estimateData);
-        toast.success('Estimate updated successfully');
+        notifyEstimateSaved(formData.qualityName, true);
       } else {
         await estimateAPI.create(estimateData);
         await estimateAPI.deleteDraft();
-        toast.success('Estimate saved successfully');
+        notifyEstimateSaved(formData.qualityName, false);
       }
 
       navigate('/estimates');
@@ -338,6 +363,15 @@ const NewEstimate = () => {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Reset form with default values
+  const handleReset = () => {
+    if (!window.confirm('Are you sure you want to reset the form? All entered data will be lost.')) return;
+    setFormData(getInitialFormData());
+    setResults(null);
+    setShowResults(false);
+    toast.success('Form reset to defaults');
   };
 
   const getYarnOptions = (type) => {
@@ -365,19 +399,40 @@ const NewEstimate = () => {
           <h1 className="text-2xl font-bold text-gray-900">
             {isEditing ? 'Edit Estimate' : 'New Estimate'}
           </h1>
-          <p className="text-gray-500 mt-1">
-            Calculate grey cloth weight and cost
-            {lastAutoSave && (
-              <span className="text-xs text-green-600 ml-2">
-                Auto-saved at {lastAutoSave.toLocaleTimeString()}
-              </span>
+          <div className="flex items-center space-x-4 mt-1">
+            <p className="text-gray-500">Calculate grey cloth weight and cost</p>
+            {!isEditing && (
+              <div className="flex items-center space-x-2">
+                {autoSaveStatus === 'saving' && (
+                  <span className="flex items-center text-xs text-blue-600">
+                    <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse mr-1.5" />
+                    Saving draft...
+                  </span>
+                )}
+                {autoSaveStatus === 'saved' && (
+                  <span className="flex items-center text-xs text-green-600">
+                    <Clock className="w-3 h-3 mr-1" />
+                    Draft saved
+                  </span>
+                )}
+                {lastAutoSave && autoSaveStatus === 'idle' && (
+                  <span className="text-xs text-gray-400">
+                    Last saved: {lastAutoSave.toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
             )}
-          </p>
+          </div>
         </div>
         <div className="flex space-x-3 mt-4 md:mt-0">
           <Button variant="secondary" onClick={() => navigate('/estimates')}>
             Cancel
           </Button>
+          {!isEditing && (
+            <Button variant="ghost" icon={RefreshCw} onClick={handleReset}>
+              Reset
+            </Button>
+          )}
           <Button
             icon={Calculator}
             onClick={handleCalculate}
@@ -394,6 +449,16 @@ const NewEstimate = () => {
           </Button>
         </div>
       </div>
+
+      {/* Default Settings Info
+      {!isEditing && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <p className="text-sm text-blue-800">
+            <strong>Default values applied:</strong> Wastage is set to {settings.defaultWastage}% based on your settings. 
+            You can change this for individual sections below.
+          </p>
+        </div>
+      )} */}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column - Inputs */}
@@ -686,26 +751,26 @@ const NewEstimate = () => {
                 <div className="p-4 bg-blue-50 rounded-xl">
                   <h4 className="font-medium text-blue-900 mb-3">Warp</h4>
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
+                    {/* <div className="flex justify-between">
                       <span className="text-blue-700">Raw Weight:</span>
                       <span className="font-medium text-blue-900">
                         {results.warp.rawWeight?.toFixed(4)}
                       </span>
-                    </div>
+                    </div> */}
                     <div className="flex justify-between">
-                      <span className="text-blue-700">Formatted Weight:</span>
+                      <span className="text-blue-700">Warp Weight:</span>
                       <span className="font-bold text-blue-900">
                         {results.warp.formattedWeight?.toFixed(4)}
                       </span>
                     </div>
-                    <div className="flex justify-between">
+                    {/* <div className="flex justify-between">
                       <span className="text-blue-700">Raw Cost:</span>
                       <span className="font-medium text-blue-900">
                         {results.warp.rawCost?.toFixed(4)}
                       </span>
-                    </div>
+                    </div> */}
                     <div className="flex justify-between">
-                      <span className="text-blue-700">Formatted Cost:</span>
+                      <span className="text-blue-700">Warp Cost:</span>
                       <span className="font-bold text-blue-900">
                         {formatCurrency(results.warp.formattedCost, settings.currencySymbol)}
                       </span>
@@ -717,26 +782,26 @@ const NewEstimate = () => {
                 <div className="p-4 bg-green-50 rounded-xl">
                   <h4 className="font-medium text-green-900 mb-3">Weft</h4>
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
+                    {/* <div className="flex justify-between">
                       <span className="text-green-700">Raw Weight:</span>
                       <span className="font-medium text-green-900">
                         {results.weft.rawWeight?.toFixed(4)}
                       </span>
-                    </div>
+                    </div> */}
                     <div className="flex justify-between">
-                      <span className="text-green-700">Formatted Weight:</span>
+                      <span className="text-green-700">Weft Weight:</span>
                       <span className="font-bold text-green-900">
                         {results.weft.formattedWeight?.toFixed(4)}
                       </span>
                     </div>
-                    <div className="flex justify-between">
+                    {/* <div className="flex justify-between">
                       <span className="text-green-700">Raw Cost:</span>
                       <span className="font-medium text-green-900">
                         {results.weft.rawCost?.toFixed(4)}
                       </span>
-                    </div>
+                    </div> */}
                     <div className="flex justify-between">
-                      <span className="text-green-700">Formatted Cost:</span>
+                      <span className="text-green-700">Weft Cost:</span>
                       <span className="font-bold text-green-900">
                         {formatCurrency(results.weft.formattedCost, settings.currencySymbol)}
                       </span>
@@ -747,28 +812,28 @@ const NewEstimate = () => {
                 {/* Weft-2 Results */}
                 {weft2Enabled && results.weft2 && (
                   <div className="p-4 bg-purple-50 rounded-xl">
-                    <h4 className="font-medium text-purple-900 mb-3">Weft-2</h4>
+                    <h4 className="font-medium text-purple-900 mb-3">Weft 2</h4>
                     <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
+                      {/* <div className="flex justify-between">
                         <span className="text-purple-700">Raw Weight:</span>
                         <span className="font-medium text-purple-900">
                           {results.weft2.rawWeight?.toFixed(4)}
                         </span>
-                      </div>
+                      </div> */}
                       <div className="flex justify-between">
-                        <span className="text-purple-700">Formatted Weight:</span>
+                        <span className="text-purple-700">Weft 2 Weight:</span>
                         <span className="font-bold text-purple-900">
                           {results.weft2.formattedWeight?.toFixed(4)}
                         </span>
                       </div>
-                      <div className="flex justify-between">
+                      {/* <div className="flex justify-between">
                         <span className="text-purple-700">Raw Cost:</span>
                         <span className="font-medium text-purple-900">
                           {results.weft2.rawCost?.toFixed(4)}
                         </span>
-                      </div>
+                      </div> */}
                       <div className="flex justify-between">
-                        <span className="text-purple-700">Formatted Cost:</span>
+                        <span className="text-purple-700">Weft 2 Cost:</span>
                         <span className="font-bold text-purple-900">
                           {formatCurrency(results.weft2.formattedCost, settings.currencySymbol)}
                         </span>
@@ -796,13 +861,13 @@ const NewEstimate = () => {
                     <div className="flex justify-between items-center">
                       <span className="text-indigo-200">Total Weight:</span>
                       <span className="text-2xl font-bold">
-                        {results.totals.totalWeight?.toFixed(4)} gm
+                        {results.totals.totalWeight?.toFixed(4)} Kg
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-indigo-200">Total Cost:</span>
                       <span className="text-2xl font-bold">
-                        {formatCurrency(results.totals.totalCost, settings.currencySymbol)}
+                        {formatCurrency(results.totals.totalCost, settings.currencySymbol)} /m
                       </span>
                     </div>
                   </div>

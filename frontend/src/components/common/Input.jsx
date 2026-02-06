@@ -10,10 +10,24 @@ const Input = ({
   error,
   required = false,
   disabled = false,
-  icon: Icon,
+  icon,
   className = '',
   ...props
 }) => {
+  // Handle both component references and React elements
+  const renderIcon = () => {
+    if (!icon) return null;
+    
+    // If icon is a React element (has type and props), render it directly
+    if (React.isValidElement(icon)) {
+      return icon;
+    }
+    
+    // If icon is a component, render it as a component
+    const IconComponent = icon;
+    return <IconComponent className="w-5 h-5 text-gray-400" />;
+  };
+
   return (
     <div className={className}>
       {label && (
@@ -23,9 +37,9 @@ const Input = ({
         </label>
       )}
       <div className="relative">
-        {Icon && (
+        {icon && (
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Icon className="w-5 h-5 text-gray-400" />
+            {renderIcon()}
           </div>
         )}
         <input
@@ -40,7 +54,7 @@ const Input = ({
             text-gray-900 placeholder-gray-400
             transition-all duration-200
             input-focus
-            ${Icon ? 'pl-10' : ''}
+            ${icon ? 'pl-10' : ''}
             ${error ? 'border-red-500 focus:border-red-500' : ''}
             ${disabled ? 'bg-gray-50 cursor-not-allowed' : 'bg-white'}
           `}
