@@ -66,12 +66,17 @@ const Dashboard = () => {
 
   const fetchData = async () => {
     try {
+      setLoading(true);
       const [analyticsRes, productionRes] = await Promise.all([
         analyticsAPI.getDashboard(),
         productionAPI.getStats()
       ]);
-      setAnalytics(analyticsRes.data);
-      setProductionStats(productionRes.data.data);
+      
+      // FIX: Backend returns { success, data: { counts, estimateStats, ... } }
+      // axios wraps in .data, so analyticsRes.data = { success, data: {...} }
+      // We need the inner .data
+      setAnalytics(analyticsRes.data?.data || analyticsRes.data);
+      setProductionStats(productionRes.data?.data || productionRes.data);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     } finally {

@@ -17,13 +17,17 @@ const getDashboardAnalytics = async (req, res) => {
       });
     }
 
-    // Get total counts
-    const totalEstimates = await Estimate.countDocuments({ company: companyId, user: userId });
-    const totalYarns = await Yarn.countDocuments({ company: companyId, user: userId });
+    // Convert to ObjectId for aggregation pipelines
+    const companyObjectId = new mongoose.Types.ObjectId(companyId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
 
-    // Get aggregated data
+    // Get total counts (find() auto-casts, so these are fine)
+    const totalEstimates = await Estimate.countDocuments({ company: companyId });
+    const totalYarns = await Yarn.countDocuments({ company: companyId });
+
+    // Get aggregated data - FIX: use ObjectId for both company AND user
     const estimateStats = await Estimate.aggregate([
-      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
+      { $match: { company: companyObjectId, user: userObjectId } },
       {
         $group: {
           _id: null,
@@ -36,14 +40,14 @@ const getDashboardAnalytics = async (req, res) => {
     ]);
 
     // Get recent estimates
-    const recentEstimates = await Estimate.find({ company: companyId, user: userId })
+    const recentEstimates = await Estimate.find({ company: companyId })
       .sort({ createdAt: -1 })
       .limit(5)
       .select('qualityName totalWeight totalCost createdAt');
 
-    // Get yarn usage stats
+    // Get yarn usage stats - FIX: use ObjectId for user
     const yarnUsageStats = await Yarn.aggregate([
-      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
+      { $match: { company: companyObjectId, user: userObjectId } },
       {
         $group: {
           _id: null,
@@ -54,20 +58,20 @@ const getDashboardAnalytics = async (req, res) => {
     ]);
 
     // Get most used yarns
-    const mostUsedYarns = await Yarn.find({ company: companyId, user: userId })
+    const mostUsedYarns = await Yarn.find({ company: companyId })
       .sort({ usageCount: -1 })
       .limit(5)
       .select('name usageCount price yarnType');
 
-    // Monthly trends (last 6 months)
+    // Monthly trends (last 6 months) - FIX: use ObjectId for user
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
     const monthlyTrends = await Estimate.aggregate([
       {
         $match: {
-          company: new mongoose.Types.ObjectId(companyId),
-          user: userId,
+          company: companyObjectId,
+          user: userObjectId,
           createdAt: { $gte: sixMonthsAgo },
         },
       },
@@ -133,9 +137,12 @@ const getYarnUsageAnalytics = async (req, res) => {
       });
     }
 
-    // Usage by yarn type
+    const companyObjectId = new mongoose.Types.ObjectId(companyId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
+    // Usage by yarn type - FIX: use ObjectId for user
     const usageByType = await Yarn.aggregate([
-      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
+      { $match: { company: companyObjectId, user: userObjectId } },
       {
         $group: {
           _id: '$yarnType',
@@ -147,14 +154,14 @@ const getYarnUsageAnalytics = async (req, res) => {
     ]);
 
     // Top yarns by usage
-    const topYarns = await Yarn.find({ company: companyId, user: userId })
+    const topYarns = await Yarn.find({ company: companyId })
       .sort({ usageCount: -1 })
       .limit(10)
       .select('name usageCount price gstPercentage yarnType');
 
-    // Price distribution
+    // Price distribution - FIX: use ObjectId for user
     const priceDistribution = await Yarn.aggregate([
-      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
+      { $match: { company: companyObjectId, user: userObjectId } },
       {
         $bucket: {
           groupBy: '$price',
@@ -168,9 +175,9 @@ const getYarnUsageAnalytics = async (req, res) => {
       },
     ]);
 
-    // Cost impact analysis
+    // Cost impact analysis - FIX: use ObjectId for user
     const costImpact = await Estimate.aggregate([
-      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
+      { $match: { company: companyObjectId, user: userObjectId } },
       { $unwind: '$warp' },
       {
         $group: {
@@ -219,6 +226,9 @@ const getCostTrends = async (req, res) => {
       });
     }
 
+    const companyObjectId = new mongoose.Types.ObjectId(companyId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+
     let startDate = new Date();
     switch (period) {
       case '1month':
@@ -237,11 +247,12 @@ const getCostTrends = async (req, res) => {
         startDate.setMonth(startDate.getMonth() - 6);
     }
 
+    // FIX: use ObjectId for user
     const trends = await Estimate.aggregate([
       {
         $match: {
-          company: new mongoose.Types.ObjectId(companyId),
-          user: userId,
+          company: companyObjectId,
+          user: userObjectId,
           createdAt: { $gte: startDate },
         },
       },

@@ -474,9 +474,13 @@ const getProductionStats = async (req, res) => {
     
     const mongoose = require('mongoose');
     
+    // FIX: Convert BOTH to ObjectId for aggregation
+    const companyObjectId = new mongoose.Types.ObjectId(companyId);
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    
     // Aggregate statistics - filter by company
     const stats = await Production.aggregate([
-      { $match: { company: new mongoose.Types.ObjectId(companyId), user: userId } },
+      { $match: { company: companyObjectId, user: userObjectId } },
       {
         $group: {
           _id: null,
